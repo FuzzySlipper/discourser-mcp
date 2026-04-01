@@ -7,9 +7,10 @@ using Microsoft.Extensions.Logging;
 namespace Discourser.Core.Connectors.Reddit;
 
 /// <summary>
-/// Typed client for the official Reddit OAuth API.
-/// Handles token lifecycle, search, and thread fetching.
-/// Returns typed intermediate data — no JSON/MCP error payloads.
+/// Typed client for the Reddit API. Supports two modes:
+/// - Authenticated (OAuth): uses oauth.reddit.com, higher rate limits, better search
+/// - Unauthenticated: uses old.reddit.com .json endpoints, no credentials needed
+/// Mode is determined automatically based on whether credentials are configured.
 /// </summary>
 public sealed class RedditApiClient
 {
@@ -40,6 +41,9 @@ public sealed class RedditApiClient
         _logger = logger;
     }
 
+    public bool IsAuthenticated =>
+        !string.IsNullOrEmpty(_clientId) && !string.IsNullOrEmpty(_clientSecret);
+
     public async Task<List<RedditPostData>> SearchAsync(
         string query,
         string? subreddit,
@@ -47,8 +51,6 @@ public sealed class RedditApiClient
         int limit,
         CancellationToken ct = default)
     {
-        await EnsureTokenAsync(ct);
-
         var path = subreddit is not null
             ? $"r/{subreddit}/search"
             : "search";
@@ -59,7 +61,7 @@ public sealed class RedditApiClient
         if (subreddit is not null)
             qs += "&restrict_sr=on";
 
-        var url = $"https://oauth.reddit.com/{path}?{qs}";
+        var url = await BuildUrlAsync($"{path}?{qs}", ct);
         var json = await GetWithRetriesAsync(url, ct);
 
         return ParseSearchListing(json);
@@ -68,12 +70,36 @@ public sealed class RedditApiClient
     public async Task<RedditThreadData> FetchThreadAsync(
         string subreddit, string threadId, CancellationToken ct = default)
     {
-        await EnsureTokenAsync(ct);
-
-        var url = $"https://oauth.reddit.com/r/{subreddit}/comments/{threadId}.json?sort=top&raw_json=1";
+        var url = await BuildUrlAsync(
+            $"r/{subreddit}/comments/{threadId}.json?sort=top&raw_json=1", ct);
         var json = await GetWithRetriesAsync(url, ct);
 
         return ParseThreadResponse(json);
+    }
+
+    private async Task<string> BuildUrlAsync(string path, CancellationToken ct)
+    {
+        if (IsAuthenticated)
+        {
+            await EnsureTokenAsync(ct);
+            return $"https://oauth.reddit.com/{path}";
+        }
+
+        // Unauthenticated: use old.reddit.com .json endpoints
+        // Insert .json before the query string if not already present
+        string unauthPath;
+        if (path.Contains(".json"))
+        {
+            unauthPath = path;
+        }
+        else
+        {
+            var qsIndex = path.IndexOf('?');
+            unauthPath = qsIndex >= 0
+                ? path[..qsIndex] + ".json" + path[qsIndex..]
+                : path + ".json";
+        }
+        return $"https://old.reddit.com/{unauthPath}";
     }
 
     private async Task<JsonElement> GetWithRetriesAsync(string url, CancellationToken ct)
@@ -81,12 +107,16 @@ public sealed class RedditApiClient
         for (var attempt = 0; attempt <= _maxRetries; attempt++)
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, url);
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _accessToken);
-            request.Headers.UserAgent.ParseAdd(_userAgent);
+            request.Headers.TryAddWithoutValidation("User-Agent", _userAgent);
+
+            if (IsAuthenticated && _accessToken is not null)
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _accessToken);
 
             using var response = await _httpClient.SendAsync(request, ct);
 
-            if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized && attempt == 0)
+            if (IsAuthenticated &&
+                response.StatusCode == System.Net.HttpStatusCode.Unauthorized &&
+                attempt == 0)
             {
                 _logger.LogDebug("Reddit returned 401, refreshing token");
                 await RefreshTokenAsync(ct);
@@ -119,6 +149,9 @@ public sealed class RedditApiClient
 
     private async Task EnsureTokenAsync(CancellationToken ct)
     {
+        if (!IsAuthenticated)
+            return;
+
         if (_accessToken is not null && DateTime.UtcNow < _tokenExpiresAt)
             return;
 
@@ -139,7 +172,7 @@ public sealed class RedditApiClient
 
             var authValue = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{_clientId}:{_clientSecret}"));
             request.Headers.Authorization = new AuthenticationHeaderValue("Basic", authValue);
-            request.Headers.UserAgent.ParseAdd(_userAgent);
+            request.Headers.TryAddWithoutValidation("User-Agent", _userAgent);
             request.Content = new FormUrlEncodedContent(new Dictionary<string, string>
             {
                 ["grant_type"] = "client_credentials"
