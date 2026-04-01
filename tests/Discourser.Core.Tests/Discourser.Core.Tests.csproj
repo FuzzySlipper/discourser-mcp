@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Discourser.Core\Discourser.Core.csproj" />
+  </ItemGroup>
+
+</Project>

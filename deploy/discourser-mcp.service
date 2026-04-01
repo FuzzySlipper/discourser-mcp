@@ -1,0 +1,15 @@
+[Unit]
+Description=Discourser MCP Server
+After=network.target
+
+[Service]
+Type=simple
+User=patch
+WorkingDirectory=/opt/discourser-mcp
+ExecStart=/opt/discourser-mcp/Discourser.Server
+Restart=always
+RestartSec=5
+Environment=ASPNETCORE_ENVIRONMENT=Production
+
+[Install]
+WantedBy=multi-user.target

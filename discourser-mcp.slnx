@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Discourser.Core/Discourser.Core.csproj" />
+    <Project Path="src/Discourser.Server/Discourser.Server.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Discourser.Core.Tests/Discourser.Core.Tests.csproj" />
+    <Project Path="tests/Architecture.Tests/Architecture.Tests.csproj" />
+  </Folder>
+</Solution>
